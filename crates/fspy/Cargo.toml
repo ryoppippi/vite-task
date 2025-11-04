@@ -19,7 +19,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net", "process", "io-util", "sync"] }
 tracing = { workspace = true }
-which = { workspace = true }
+which = { workspace = true, features = ["tracing"] }
 xxhash-rust = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
