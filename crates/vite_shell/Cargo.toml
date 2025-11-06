@@ -1,0 +1,17 @@
+[package]
+name = "vite_shell"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+rust-version.workspace = true
+
+[dependencies]
+ast-grep-core = { workspace = true }
+thiserror = { workspace = true }
+tree-sitter = "0.24.7"
+tree-sitter-bash = "0.23.1"
+
+[lints]
+workspace = true
