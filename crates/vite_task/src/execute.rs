@@ -11,6 +11,7 @@ use std::{
 use bincode::{Decode, Encode};
 use fspy::{AccessMode, Spy};
 use futures_util::future::try_join3;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use supports_color::{Stream, on};
@@ -348,6 +349,36 @@ pub async fn execute_task(
             cmd
         }
         TaskCommand::Parsed(task_parsed_command) => {
+            // handle shell built-ins
+            match task_parsed_command.program.as_str() {
+                "echo" => {
+                    let mut prints_new_line = true;
+                    let mut args = task_parsed_command.args.as_slice();
+                    if let Some(first_arg) = args.first()
+                        && first_arg == "-n"
+                    {
+                        prints_new_line = false;
+                        args = &args[1..];
+                    }
+                    let mut output = args.iter().map(|arg| arg.as_str()).join(" ");
+                    if prints_new_line {
+                        output.push('\n');
+                    }
+                    print!("{output}");
+                    return Ok(ExecutedTask {
+                        std_outputs: vec![StdOutput {
+                            kind: OutputKind::StdOut,
+                            content: Vec::<u8>::from(output).into(),
+                        }]
+                        .into(),
+                        exit_status: ExitStatus::default(),
+                        path_reads: Default::default(),
+                        path_writes: Default::default(),
+                        duration: Duration::ZERO,
+                    });
+                }
+                _ => {}
+            }
             if resolved_command.fingerprint.command.need_skip_cache() {
                 let mut child = tokio::process::Command::new(&task_parsed_command.program)
                     .args(&task_parsed_command.args)
