@@ -1,6 +1,7 @@
 use std::{
     ffi::OsStr,
     fmt::Display,
+    hash::Hash,
     ops::Deref,
     path::{Path, PathBuf},
     sync::Arc,
@@ -11,7 +12,7 @@ use ref_cast::{RefCastCustom, ref_cast_custom};
 use crate::relative::{FromPathError, InvalidPathDataError, RelativePathBuf};
 
 /// A path that is guaranteed to be absolute
-#[derive(RefCastCustom, Debug, PartialEq, Eq)]
+#[derive(RefCastCustom, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct AbsolutePath(Path);
 impl AsRef<Self> for AbsolutePath {
@@ -28,6 +29,12 @@ impl PartialEq<AbsolutePathBuf> for AbsolutePath {
 impl PartialEq<AbsolutePathBuf> for &AbsolutePath {
     fn eq(&self, other: &AbsolutePathBuf) -> bool {
         self.0 == other.0
+    }
+}
+
+impl Hash for AbsolutePath {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
     }
 }
 
