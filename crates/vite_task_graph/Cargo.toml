@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 monostate = "1.0.2"
 petgraph = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -24,6 +25,7 @@ copy_dir = { workspace = true }
 insta = { workspace = true, features = ["glob", "json"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
+toml = { workspace = true }
 
 [lints]
 workspace = true
