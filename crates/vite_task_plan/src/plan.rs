@@ -391,29 +391,33 @@ pub enum ParentCacheConfig {
 ///   env config and merges in any additional envs the synthetic command needs.
 /// - If there is no parent (top-level invocation), the synthetic task's own
 ///   [`UserCacheConfig`] is resolved with defaults.
+#[expect(clippy::result_large_err, reason = "Error is large for diagnostics")]
 fn resolve_synthetic_cache_config(
     parent: ParentCacheConfig,
     synthetic_cache_config: UserCacheConfig,
     cwd: &Arc<AbsolutePath>,
-) -> Option<CacheConfig> {
+    workspace_path: &AbsolutePath,
+) -> Result<Option<CacheConfig>, Error> {
     match parent {
         ParentCacheConfig::None => {
             // Top-level: resolve from synthetic's own config
-            ResolvedTaskOptions::resolve(
+            Ok(ResolvedTaskOptions::resolve(
                 UserTaskOptions {
                     cache_config: synthetic_cache_config,
                     cwd_relative_to_package: None,
                     depends_on: None,
                 },
                 cwd,
+                workspace_path,
             )
-            .cache_config
+            .map_err(Error::ResolveTaskConfig)?
+            .cache_config)
         }
-        ParentCacheConfig::Disabled => Option::None,
+        ParentCacheConfig::Disabled => Ok(Option::None),
         ParentCacheConfig::Inherited(mut parent_config) => {
             // Cache is enabled only if both parent and synthetic want it.
             // Merge synthetic's additions into parent's config.
-            match synthetic_cache_config {
+            Ok(match synthetic_cache_config {
                 UserCacheConfig::Disabled { .. } => Option::None,
                 UserCacheConfig::Enabled { enabled_cache_config, .. } => {
                     if let Some(extra_envs) = enabled_cache_config.envs {
@@ -424,7 +428,7 @@ fn resolve_synthetic_cache_config(
                     }
                     Some(parent_config)
                 }
-            }
+            })
         }
     }
 }
@@ -442,7 +446,7 @@ pub fn plan_synthetic_request(
 
     let program_path = which(&program, &envs, cwd)?;
     let resolved_cache_config =
-        resolve_synthetic_cache_config(parent_cache_config, cache_config, cwd);
+        resolve_synthetic_cache_config(parent_cache_config, cache_config, cwd, workspace_path)?;
     let resolved_options =
         ResolvedTaskOptions { cwd: Arc::clone(cwd), cache_config: resolved_cache_config };
 
@@ -544,11 +548,13 @@ fn plan_spawn_execution(
             program_fingerprint,
             args: Arc::clone(&args),
             env_fingerprints,
-            fingerprint_ignores: None,
         };
         if let Some(execution_cache_key) = execution_cache_key {
-            resolved_cache_metadata =
-                Some(CacheMetadata { spawn_fingerprint, execution_cache_key });
+            resolved_cache_metadata = Some(CacheMetadata {
+                spawn_fingerprint,
+                execution_cache_key,
+                input_config: cache_config.input_config.clone(),
+            });
         }
     }
 

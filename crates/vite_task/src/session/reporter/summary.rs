@@ -112,6 +112,8 @@ pub enum SavedCacheMissReason {
     NotFound,
     /// Spawn fingerprint changed (command, envs, cwd, etc.).
     SpawnFingerprintChanged(Vec<SpawnFingerprintChange>),
+    /// Task configuration changed (`input_config` or `glob_base`).
+    ConfigChanged,
     /// Content of an input file changed.
     InputContentChanged { path: Str },
 }
@@ -235,10 +237,14 @@ impl SavedCacheMissReason {
         match cache_miss {
             CacheMiss::NotFound => Self::NotFound,
             CacheMiss::FingerprintMismatch(mismatch) => match mismatch {
-                FingerprintMismatch::SpawnFingerprintMismatch { old, new } => {
+                FingerprintMismatch::SpawnFingerprint { old, new } => {
                     Self::SpawnFingerprintChanged(detect_spawn_fingerprint_changes(old, new))
                 }
-                FingerprintMismatch::PostRunFingerprintMismatch(diff) => {
+                FingerprintMismatch::InputConfig => Self::ConfigChanged,
+                FingerprintMismatch::GlobbedInput { path } => {
+                    Self::InputContentChanged { path: Str::from(path.as_str()) }
+                }
+                FingerprintMismatch::PostRunFingerprint(diff) => {
                     use crate::session::execute::fingerprint::PostRunFingerprintMismatch;
                     match diff {
                         PostRunFingerprintMismatch::InputContentChanged { path } => {
@@ -424,6 +430,9 @@ impl TaskResult {
                                 formatted.iter().map(Str::as_str).collect::<Vec<_>>().join("; ");
                             vite_str::format!("→ Cache miss: {joined}")
                         }
+                    }
+                    SavedCacheMissReason::ConfigChanged => {
+                        Str::from("→ Cache miss: inputs configuration changed")
                     }
                     SavedCacheMissReason::InputContentChanged { path } => {
                         vite_str::format!("→ Cache miss: content of input '{path}' changed")

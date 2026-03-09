@@ -3796,6 +3796,7 @@ name = "vite_glob"
 version = "0.0.0"
 dependencies = [
  "thiserror 2.0.18",
+ "vite_path",
  "vite_str",
  "wax",
 ]
@@ -3816,6 +3817,7 @@ dependencies = [
  "assert2",
  "bincode",
  "diff-struct",
+ "path-clean",
  "ref-cast",
  "serde",
  "thiserror 2.0.18",
@@ -3879,17 +3881,18 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "twox-hash",
- "vite_glob",
  "vite_path",
  "vite_select",
  "vite_str",
  "vite_task_graph",
  "vite_task_plan",
  "vite_workspace",
+ "wax",
 ]
 
 [[package]]
@@ -3926,6 +3929,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bincode",
  "monostate",
  "petgraph",
  "pretty_assertions",
@@ -3939,6 +3943,7 @@ dependencies = [
  "vite_path",
  "vite_str",
  "vite_workspace",
+ "wax",
  "which",
 ]
 
@@ -4002,7 +4007,6 @@ name = "vite_workspace"
 version = "0.0.0"
 dependencies = [
  "clap",
- "path-clean",
  "petgraph",
  "rustc-hash",
  "serde",
