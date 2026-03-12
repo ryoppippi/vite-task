@@ -79,11 +79,15 @@ fn effective_cache_config(
     if enabled { task_cache_config.cloned() } else { None }
 }
 
+/// - `with_hooks`: whether to look up `preX`/`postX` lifecycle hooks for this task.
+///   `false` when the task itself is being executed as a hook, so that hooks are
+///   never expanded more than one level deep (matching npm behavior).
 #[expect(clippy::too_many_lines, reason = "sequential planning steps are clearer in one function")]
 #[expect(clippy::future_not_send, reason = "PlanContext contains !Send dyn PlanRequestParser")]
 async fn plan_task_as_execution_node(
     task_node_index: TaskNodeIndex,
     mut context: PlanContext<'_>,
+    with_hooks: bool,
 ) -> Result<TaskExecution, Error> {
     // Check for recursions in the task call stack.
     context.check_recursion(task_node_index)?;
@@ -99,6 +103,26 @@ async fn plan_task_as_execution_node(
     }
 
     let mut items = Vec::<ExecutionItem>::new();
+
+    // Expand pre/post hooks (`preX`/`postX`) for package.json scripts.
+    // Hooks are never expanded more than one level deep (matching npm behavior): when planning a
+    // hook script, `with_hooks` is false so it won't look for its own pre/post hooks.
+    // Resolve the flag once before any mutable borrow of `context` (duplicate() needs &mut).
+    let pre_post_scripts_enabled =
+        with_hooks && context.indexed_task_graph().pre_post_scripts_enabled();
+    let pre_hook_idx = if pre_post_scripts_enabled {
+        context.indexed_task_graph().get_script_hook(task_node_index, "pre")
+    } else {
+        None
+    };
+    if let Some(pre_hook_idx) = pre_hook_idx {
+        let mut pre_context = context.duplicate();
+        // Extra args (e.g. `vt run test --coverage`) must not be forwarded to hooks.
+        pre_context.set_extra_args(Arc::new([]));
+        let pre_execution =
+            Box::pin(plan_task_as_execution_node(pre_hook_idx, pre_context, false)).await?;
+        items.extend(pre_execution.items);
+    }
 
     // Use task's resolved cwd for display (from task config's cwd option)
     let mut cwd = Arc::clone(&task_node.resolved_config.resolved_options.cwd);
@@ -355,6 +379,21 @@ async fn plan_task_as_execution_node(
             execution_item_display,
             kind: ExecutionItemKind::Leaf(LeafExecutionKind::Spawn(spawn_execution)),
         });
+    }
+
+    // Expand post-hook (`postX`) for package.json scripts.
+    let post_hook_idx = if pre_post_scripts_enabled {
+        context.indexed_task_graph().get_script_hook(task_node_index, "post")
+    } else {
+        None
+    };
+    if let Some(post_hook_idx) = post_hook_idx {
+        let mut post_context = context.duplicate();
+        // Extra args must not be forwarded to hooks.
+        post_context.set_extra_args(Arc::new([]));
+        let post_execution =
+            Box::pin(plan_task_as_execution_node(post_hook_idx, post_context, false)).await?;
+        items.extend(post_execution.items);
     }
 
     Ok(TaskExecution { task_display: task_node.task_display.clone(), items })
@@ -648,8 +687,9 @@ pub async fn plan_query_request(
         if Some(task_index) == pruned_task {
             continue;
         }
-        let task_execution =
-            plan_task_as_execution_node(task_index, context.duplicate()).boxed_local().await?;
+        let task_execution = plan_task_as_execution_node(task_index, context.duplicate(), true)
+            .boxed_local()
+            .await?;
         execution_node_indices_by_task_index
             .insert(task_index, inner_graph.add_node(task_execution));
     }
