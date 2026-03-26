@@ -397,6 +397,8 @@ pub const DEFAULT_UNTRACKED_ENV: &[&str] = &[
     "COMPOSE_*",
     // Playwright specific
     "PLAYWRIGHT_*",
+    // Vite+ internal (not fingerprinted — internal state, not build-affecting)
+    "VP_*",
     // Token patterns
     "*_TOKEN",
 ];
