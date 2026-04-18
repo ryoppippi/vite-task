@@ -37,9 +37,6 @@ pub struct SpyImpl {
     preload_path: Box<NativeStr>,
 }
 
-#[cfg(not(target_env = "musl"))]
-const PRELOAD_CDYLIB_BINARY: &[u8] = include_bytes!(env!("CARGO_CDYLIB_FILE_FSPY_PRELOAD_UNIX"));
-
 impl SpyImpl {
     /// Initialize the fs access spy by writing the preload library on disk.
     ///
@@ -48,18 +45,11 @@ impl SpyImpl {
     pub fn init_in(#[cfg_attr(target_env = "musl", allow(unused))] dir: &Path) -> io::Result<Self> {
         #[cfg(not(target_env = "musl"))]
         let preload_path = {
-            use const_format::formatcp;
-            use xxhash_rust::const_xxh3::xxh3_128;
+            use materialized_artifact::{Artifact, artifact};
 
-            use crate::artifact::Artifact;
+            const PRELOAD_CDYLIB: Artifact = artifact!("fspy_preload");
 
-            const PRELOAD_CDYLIB: Artifact = Artifact {
-                name: "fspy_preload",
-                content: PRELOAD_CDYLIB_BINARY,
-                hash: formatcp!("{:x}", xxh3_128(PRELOAD_CDYLIB_BINARY)),
-            };
-
-            let preload_cdylib_path = PRELOAD_CDYLIB.write_to(dir, ".dylib")?;
+            let preload_cdylib_path = PRELOAD_CDYLIB.materialize().suffix(".dylib").at(dir)?;
             preload_cdylib_path.as_path().into()
         };
 
@@ -68,8 +58,9 @@ impl SpyImpl {
             preload_path,
             #[cfg(target_os = "macos")]
             artifacts: {
-                let coreutils_path = macos_artifacts::COREUTILS_BINARY.write_to(dir, "")?;
-                let bash_path = macos_artifacts::OILS_BINARY.write_to(dir, "")?;
+                let coreutils_path =
+                    macos_artifacts::COREUTILS_BINARY.materialize().executable().at(dir)?;
+                let bash_path = macos_artifacts::OILS_BINARY.materialize().executable().at(dir)?;
                 Artifacts {
                     bash_path: bash_path.as_path().into(),
                     coreutils_path: coreutils_path.as_path().into(),

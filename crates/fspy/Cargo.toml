@@ -9,28 +9,23 @@ allocator-api2 = { workspace = true, features = ["alloc"] }
 wincode = { workspace = true }
 bstr = { workspace = true, default-features = false }
 bumpalo = { workspace = true }
-const_format = { workspace = true, features = ["fmt"] }
 derive_more = { workspace = true, features = ["debug"] }
+materialized_artifact = { workspace = true }
 fspy_shared = { workspace = true }
 futures-util = { workspace = true }
 libc = { workspace = true }
 ouroboros = { workspace = true }
-rand = { workspace = true }
 rustc-hash = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net", "process", "io-util", "sync", "rt"] }
 tokio-util = { workspace = true }
 which = { workspace = true, features = ["tracing"] }
-xxhash-rust = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 fspy_seccomp_unotify = { workspace = true, features = ["supervisor"] }
 nix = { workspace = true, features = ["uio"] }
 tokio = { workspace = true, features = ["bytes"] }
-
-[target.'cfg(all(unix, not(target_env = "musl")))'.dependencies]
-fspy_preload_unix = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 fspy_shared_unix = { workspace = true }
@@ -38,7 +33,6 @@ nix = { workspace = true, features = ["fs", "process", "socket", "feature"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 fspy_detours_sys = { workspace = true }
-fspy_preload_windows = { workspace = true }
 winapi = { workspace = true, features = ["winbase", "securitybaseapi", "handleapi"] }
 winsafe = { workspace = true }
 
@@ -59,11 +53,19 @@ fspy_test_bin = { path = "../fspy_test_bin", artifact = "bin", target = "aarch64
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 fspy_test_bin = { path = "../fspy_test_bin", artifact = "bin", target = "x86_64-unknown-linux-musl" }
 
+# Artifact build-deps must be unconditional: cargo's resolver panics when
+# `artifact = "cdylib"` deps live under a `[target.cfg.build-dependencies]`
+# block on cross-compile. Each preload crate's source is cfg-gated to compile
+# as an empty cdylib on non-applicable targets, so the unused cross-target
+# builds are cheap.
 [build-dependencies]
 anyhow = { workspace = true }
+materialized_artifact_build = { workspace = true }
 flate2 = { workspace = true }
+fspy_preload_unix = { workspace = true }
+fspy_preload_windows = { workspace = true }
+sha2 = { workspace = true }
 tar = { workspace = true }
-xxhash-rust = { workspace = true, features = ["xxh3"] }
 
 [lints]
 workspace = true
@@ -72,4 +74,4 @@ workspace = true
 doctest = false
 
 [package.metadata.cargo-shear]
-ignored = ["ctor", "fspy_test_bin"]
+ignored = ["ctor", "fspy_test_bin", "fspy_preload_unix", "fspy_preload_windows"]
