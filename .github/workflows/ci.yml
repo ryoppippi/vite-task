@@ -50,7 +50,7 @@ jobs:
       - name: Update submodules
         run: git submodule update --init --recursive
 
-      - uses: oxc-project/setup-rust@d286d43bc1f606abbd98096666ff8be68c8d5f57 # v1.0.0
+      - uses: oxc-project/setup-rust@d286d43bc1f606abbd98096666ff8be68c8d5f57 # v1.0.2
         with:
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: clippy
@@ -105,7 +105,7 @@ jobs:
             CARGO_HOME,{{ DEV_DRIVE }}/.cargo
             RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
 
-      - uses: oxc-project/setup-rust@d286d43bc1f606abbd98096666ff8be68c8d5f57 # v1.0.0
+      - uses: oxc-project/setup-rust@d286d43bc1f606abbd98096666ff8be68c8d5f57 # v1.0.2
         with:
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: test
@@ -218,7 +218,7 @@ jobs:
       - name: Update submodules
         run: git submodule update --init --recursive
 
-      - uses: oxc-project/setup-rust@d286d43bc1f606abbd98096666ff8be68c8d5f57 # v1.0.0
+      - uses: oxc-project/setup-rust@d286d43bc1f606abbd98096666ff8be68c8d5f57 # v1.0.2
         with:
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: fmt
