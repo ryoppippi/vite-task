@@ -68,7 +68,7 @@ jobs:
   test:
     needs: detect-changes
     if: needs.detect-changes.outputs.code-changed == 'true'
-    name: Test
+    name: Test (${{ matrix.shard }})
     strategy:
       fail-fast: false
       matrix:
@@ -77,18 +77,71 @@ jobs:
             target: x86_64-unknown-linux-gnu
             cargo_cmd: cargo-zigbuild
             build_target: x86_64-unknown-linux-gnu.2.17
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            cargo_cmd: cargo
-            build_target: x86_64-pc-windows-msvc
+            shard: linux-gnu
+            scope: ''
+            run_env: ''
           - os: namespace-profile-mac-default
             target: aarch64-apple-darwin
             cargo_cmd: cargo
             build_target: aarch64-apple-darwin
+            shard: macos-arm64
+            scope: ''
+            run_env: ''
           - os: namespace-profile-mac-default
             target: x86_64-apple-darwin
             cargo_cmd: cargo
             build_target: x86_64-apple-darwin
+            shard: macos-x64
+            scope: ''
+            run_env: ''
+          # Windows e2e fixtures dominate wall-clock (60s per PTY step vs 20s on
+          # Unix). Coverage is partitioned by crate: the e2e shards run
+          # `-p vite_task_bin` and the non-e2e shard runs
+          # `--workspace --exclude vite_task_bin`; the union is the workspace
+          # by construction. The e2e_snapshots harness self-shards via
+          # VT_SHARD_INDEX/VT_SHARD_TOTAL across the 5 e2e jobs.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo_cmd: cargo
+            build_target: x86_64-pc-windows-msvc
+            shard: windows-e2e-1
+            scope: '-p vite_task_bin'
+            run_env: 'VT_SHARD_INDEX=1 VT_SHARD_TOTAL=5'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo_cmd: cargo
+            build_target: x86_64-pc-windows-msvc
+            shard: windows-e2e-2
+            scope: '-p vite_task_bin'
+            run_env: 'VT_SHARD_INDEX=2 VT_SHARD_TOTAL=5'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo_cmd: cargo
+            build_target: x86_64-pc-windows-msvc
+            shard: windows-e2e-3
+            scope: '-p vite_task_bin'
+            run_env: 'VT_SHARD_INDEX=3 VT_SHARD_TOTAL=5'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo_cmd: cargo
+            build_target: x86_64-pc-windows-msvc
+            shard: windows-e2e-4
+            scope: '-p vite_task_bin'
+            run_env: 'VT_SHARD_INDEX=4 VT_SHARD_TOTAL=5'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo_cmd: cargo
+            build_target: x86_64-pc-windows-msvc
+            shard: windows-e2e-5
+            scope: '-p vite_task_bin'
+            run_env: 'VT_SHARD_INDEX=5 VT_SHARD_TOTAL=5'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cargo_cmd: cargo
+            build_target: x86_64-pc-windows-msvc
+            shard: windows-non-e2e
+            scope: '--workspace --exclude vite_task_bin'
+            run_env: ''
     runs-on: ${{ matrix.os }}
     steps:
       - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
@@ -124,13 +177,13 @@ jobs:
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
 
       - name: Build tests
-        run: ${{ matrix.cargo_cmd }} test --no-run --target ${{ matrix.build_target }}
+        run: ${{ matrix.cargo_cmd }} test --no-run ${{ matrix.scope }} --target ${{ matrix.build_target }}
 
       # Default `cargo test` runs only tests that need nothing beyond the
       # Rust toolchain; this step verifies that contract before Node.js
       # and pnpm enter the picture.
       - name: Run tests
-        run: ${{ matrix.cargo_cmd }} test --target ${{ matrix.build_target }}
+        run: ${{ matrix.run_env }} ${{ matrix.cargo_cmd }} test ${{ matrix.scope }} --target ${{ matrix.build_target }}
 
       # x86_64-apple-darwin runs on arm64 runner under Rosetta; install x64 Node
       # so fspy's x86_64 preload dylib can be injected into spawned node procs.
@@ -139,7 +192,7 @@ jobs:
           architecture: ${{ matrix.target == 'x86_64-apple-darwin' && 'x64' || '' }}
 
       - name: Run ignored tests
-        run: ${{ matrix.cargo_cmd }} test --target ${{ matrix.build_target }} -- --ignored
+        run: ${{ matrix.run_env }} ${{ matrix.cargo_cmd }} test ${{ matrix.scope }} --target ${{ matrix.build_target }} -- --ignored
 
   test-musl:
     needs: detect-changes
