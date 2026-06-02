@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "cross-env": "^10.1.0",
-    "oxfmt": "0.42.0",
+    "cross-env": "catalog:",
+    "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:"
   }
