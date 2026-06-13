@@ -7,7 +7,10 @@ use test_log::test;
 
 /// Get the packages/tools/.bin directory path
 fn tools_bin_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    // Resolve CARGO_MANIFEST_DIR at run time, not via `env!`: a compile-time
+    // path can point at a different checkout than the one executing the test.
+    let manifest_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    manifest_dir
         .parent()
         .unwrap()
         .parent()
