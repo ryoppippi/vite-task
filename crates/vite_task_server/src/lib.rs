@@ -14,7 +14,7 @@ use wincode::{SchemaWrite, config::DefaultConfig};
 
 pub trait Handler {
     fn disable_cache(&mut self);
-    fn get_env(&mut self, name: &OsStr) -> Option<Arc<OsStr>>;
+    fn get_env(&mut self, name: &OsStr, tracked: bool) -> Option<Arc<OsStr>>;
     /// Returns the subset of the env map whose names match `pattern` as a glob.
     ///
     /// # Errors
@@ -23,6 +23,7 @@ pub trait Handler {
     fn get_envs(
         &mut self,
         pattern: &str,
+        tracked: bool,
     ) -> Result<FxHashMap<Arc<OsStr>, Arc<OsStr>>, vite_glob::env::EnvGlobError>;
 }
 
@@ -52,24 +53,24 @@ pub struct InvalidGlob {
     pub source: vite_glob::env::EnvGlobError,
 }
 
-/// A [`Handler`] that records every report and resolves `get_env` against
-/// provided envs.
+/// A [`Handler`] that records cache-relevant reports and resolves env requests
+/// against provided envs.
 ///
 /// Call [`Recorder::into_reports`] after the driver future completes to
 /// recover the collected [`Reports`].
 pub struct Recorder {
     cache_disabled: bool,
-    env_records: FxHashMap<Arc<OsStr>, Option<Arc<OsStr>>>,
-    env_glob_records: FxHashMap<Arc<str>, EnvGlobRecord>,
+    tracked_get_env: FxHashMap<Arc<OsStr>, Option<Arc<OsStr>>>,
+    tracked_get_envs: FxHashMap<Arc<str>, EnvGlobRecord>,
     /// The envs `get_env` resolves against. The runner supplies these for the
     /// spawned task; the server never re-reads the live process env.
     envs: Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>,
 }
 
-/// A record of a glob-pattern env query made via `get_envs`.
+/// A record of a tracked glob-pattern env query made via `get_envs`.
 ///
-/// `matches` is captured on the first call and reused on repeat queries; the server's
-/// env map is immutable for a task's lifetime.
+/// `matches` is captured on the first call and reused on repeat queries; the
+/// server's env map is immutable for a task's lifetime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvGlobRecord {
     pub matches: FxHashMap<Arc<OsStr>, Arc<OsStr>>,
@@ -79,8 +80,8 @@ pub struct EnvGlobRecord {
 #[derive(Debug, Default)]
 pub struct Reports {
     pub cache_disabled: bool,
-    pub env_records: FxHashMap<Arc<OsStr>, Option<Arc<OsStr>>>,
-    pub env_glob_records: FxHashMap<Arc<str>, EnvGlobRecord>,
+    pub tracked_get_env: FxHashMap<Arc<OsStr>, Option<Arc<OsStr>>>,
+    pub tracked_get_envs: FxHashMap<Arc<str>, EnvGlobRecord>,
 }
 
 impl Recorder {
@@ -88,8 +89,8 @@ impl Recorder {
     pub fn new(envs: Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>) -> Self {
         Self {
             cache_disabled: false,
-            env_records: FxHashMap::default(),
-            env_glob_records: FxHashMap::default(),
+            tracked_get_env: FxHashMap::default(),
+            tracked_get_envs: FxHashMap::default(),
             envs,
         }
     }
@@ -98,8 +99,8 @@ impl Recorder {
     pub fn into_reports(self) -> Reports {
         Reports {
             cache_disabled: self.cache_disabled,
-            env_records: self.env_records,
-            env_glob_records: self.env_glob_records,
+            tracked_get_env: self.tracked_get_env,
+            tracked_get_envs: self.tracked_get_envs,
         }
     }
 }
@@ -109,22 +110,20 @@ impl Handler for Recorder {
         self.cache_disabled = true;
     }
 
-    fn get_env(&mut self, name: &OsStr) -> Option<Arc<OsStr>> {
-        match self.env_records.entry(name.into()) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let value = self.envs.get(name).cloned();
-                entry.insert(value.clone());
-                value
-            }
+    fn get_env(&mut self, name: &OsStr, tracked: bool) -> Option<Arc<OsStr>> {
+        let value = self.envs.get(name).cloned();
+        if tracked {
+            self.tracked_get_env.entry(name.into()).or_insert_with(|| value.clone());
         }
+        value
     }
 
     fn get_envs(
         &mut self,
         pattern: &str,
+        tracked: bool,
     ) -> Result<FxHashMap<Arc<OsStr>, Arc<OsStr>>, vite_glob::env::EnvGlobError> {
-        if let Some(existing) = self.env_glob_records.get(pattern) {
+        if let Some(existing) = self.tracked_get_envs.get(pattern) {
             return Ok(existing.matches.clone());
         }
         let glob = vite_glob::env::EnvGlob::new(pattern)?;
@@ -140,8 +139,10 @@ impl Handler for Recorder {
                 }
             })
             .collect();
-        self.env_glob_records
-            .insert(Arc::from(pattern), EnvGlobRecord { matches: matches.clone() });
+        if tracked {
+            self.tracked_get_envs
+                .insert(Arc::from(pattern), EnvGlobRecord { matches: matches.clone() });
+        }
         Ok(matches)
     }
 }
@@ -367,18 +368,19 @@ async fn handle_client<H: Handler>(mut stream: Stream, handler: &RefCell<H>) -> 
             Request::DisableCache => {
                 handler.borrow_mut().disable_cache();
             }
-            Request::GetEnv { name } => {
-                let value = handler.borrow_mut().get_env(name.to_cow_os_str().as_ref());
+            Request::GetEnv { name, tracked } => {
+                let value = handler.borrow_mut().get_env(name.to_cow_os_str().as_ref(), tracked);
                 let response = GetEnvResponse { env_value: value.as_deref().map(Into::into) };
                 write_response(&mut stream, &response).await.map_err(Error::WriteResponse)?;
             }
-            Request::GetEnvs { pattern } => {
-                let matches = handler.borrow_mut().get_envs(pattern).map_err(|source| {
-                    Error::InvalidGlob(Box::new(InvalidGlob {
-                        pattern: Box::<str>::from(pattern),
-                        source,
-                    }))
-                })?;
+            Request::GetEnvs { pattern, tracked } => {
+                let matches =
+                    handler.borrow_mut().get_envs(pattern, tracked).map_err(|source| {
+                        Error::InvalidGlob(Box::new(InvalidGlob {
+                            pattern: Box::<str>::from(pattern),
+                            source,
+                        }))
+                    })?;
                 let response = GetEnvsResponse {
                     entries: matches.iter().map(|(k, v)| ((&**k).into(), (&**v).into())).collect(),
                 };
