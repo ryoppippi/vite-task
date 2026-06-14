@@ -211,14 +211,22 @@ pub enum FingerprintMismatch {
     },
     /// A runner-aware tool-tracked env var changed between runs.
     TrackedEnvChanged(EnvMismatch),
+    /// A runner-aware tool-tracked env glob's match-set changed between runs.
+    TrackedEnvGlobChanged {
+        pattern: Str,
+        mismatch: EnvMismatch,
+    },
 }
 
 impl From<crate::session::execute::fingerprint::PostRunMismatch> for FingerprintMismatch {
     fn from(mismatch: crate::session::execute::fingerprint::PostRunMismatch) -> Self {
         use crate::session::execute::fingerprint::PostRunMismatch;
         match mismatch {
-            PostRunMismatch::InputChanged { kind, path } => Self::InputChanged { kind, path },
-            PostRunMismatch::TrackedEnvChanged(mismatch) => Self::TrackedEnvChanged(mismatch),
+            PostRunMismatch::Input { kind, path } => Self::InputChanged { kind, path },
+            PostRunMismatch::TrackedEnv(mismatch) => Self::TrackedEnvChanged(mismatch),
+            PostRunMismatch::TrackedEnvGlob { pattern, mismatch } => {
+                Self::TrackedEnvGlobChanged { pattern, mismatch }
+            }
         }
     }
 }
@@ -244,7 +252,7 @@ pub fn split_path(path: &str) -> (Option<&str>, &str) {
 /// its own cache warm across branch switches, and a cache from a different
 /// version is simply ignored (it lives in a directory this build never looks
 /// at) rather than aborting the run. Bumping the version starts a fresh cache.
-const CACHE_SCHEMA_VERSION: u32 = 15;
+const CACHE_SCHEMA_VERSION: u32 = 16;
 
 /// Name of the per-version subdirectory (e.g. `v14`) under the task-cache
 /// directory that holds the database and output archives for the current

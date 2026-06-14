@@ -186,8 +186,9 @@ pub fn format_cache_status_inline(cache_status: &CacheStatus) -> Option<Str> {
                 FingerprintMismatch::InputChanged { kind, path } => {
                     format_input_change_str(*kind, path.as_str())
                 }
-                FingerprintMismatch::TrackedEnvChanged(mismatch) => {
-                    format_env_changed_inline(&[mismatch.name()])
+                FingerprintMismatch::TrackedEnvChanged(mismatch)
+                | FingerprintMismatch::TrackedEnvGlobChanged { mismatch, .. } => {
+                    vite_str::format!("{mismatch}")
                 }
             };
             Some(vite_str::format!("○ cache miss: {reason}, executing"))
@@ -242,6 +243,30 @@ mod tests {
         assert_eq!(
             format_env_changed_inline(&[&first, &second]).as_str(),
             "envs 'API_KEY', 'NODE_ENV' changed"
+        );
+    }
+
+    #[test]
+    fn inline_tracked_env_mismatch_preserves_kind() {
+        let added = CacheStatus::Miss(CacheMiss::FingerprintMismatch(
+            FingerprintMismatch::TrackedEnvGlobChanged {
+                pattern: Str::from("PROBE_*"),
+                mismatch: EnvMismatch::Added { name: Str::from("PROBE_C") },
+            },
+        ));
+        let removed = CacheStatus::Miss(CacheMiss::FingerprintMismatch(
+            FingerprintMismatch::TrackedEnvChanged(EnvMismatch::Removed {
+                name: Str::from("PROBE_A"),
+            }),
+        ));
+
+        assert_eq!(
+            format_cache_status_inline(&added).as_deref(),
+            Some("○ cache miss: env 'PROBE_C' added, executing")
+        );
+        assert_eq!(
+            format_cache_status_inline(&removed).as_deref(),
+            Some("○ cache miss: env 'PROBE_A' removed, executing")
         );
     }
 }
