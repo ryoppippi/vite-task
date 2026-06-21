@@ -15,8 +15,6 @@
 //! contains only task-having packages; edges map directly to task dependency edges.
 //!
 //! Explicit `dependsOn` dependencies are then added on top by `add_dependencies`.
-//! String-form entries are followed as task graph edges; object-form entries
-//! select direct package dependencies from the source task for the concrete query.
 
 use petgraph::{Direction, prelude::DiGraphMap, visit::EdgeRef};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -24,7 +22,7 @@ use vite_str::Str;
 use vite_workspace::PackageNodeIndex;
 pub use vite_workspace::package_graph::{PackageQuery, PackageQueryResolveError};
 
-use crate::{IndexedTaskGraph, PackageDependencyEntry, TaskDependencyType, TaskId, TaskNodeIndex};
+use crate::{IndexedTaskGraph, TaskDependencyType, TaskId, TaskNodeIndex};
 
 /// A task execution graph queried from a `TaskQuery`.
 ///
@@ -150,22 +148,6 @@ impl IndexedTaskGraph {
         })
     }
 
-    /// Resolve each package to its `task_name` task node, dropping packages that
-    /// don't define the task. Duplicate packages collapse to a single entry.
-    fn resolve_packages_to_tasks(
-        &self,
-        packages: impl Iterator<Item = PackageNodeIndex>,
-        task_name: &Str,
-    ) -> FxHashMap<PackageNodeIndex, TaskNodeIndex> {
-        packages
-            .filter_map(|pkg| {
-                self.node_indices_by_task_id
-                    .get(&TaskId { package_index: pkg, task_name: task_name.clone() })
-                    .map(|&task_idx| (pkg, task_idx))
-            })
-            .collect()
-    }
-
     /// Map a package subgraph to a task execution graph.
     ///
     /// For packages **with** the task: add the corresponding `TaskNodeIndex`.
@@ -186,7 +168,14 @@ impl IndexedTaskGraph {
         execution_graph: &mut TaskExecutionGraph,
     ) {
         // Build the task-lookup map for all packages that have the requested task.
-        let pkg_to_task = self.resolve_packages_to_tasks(package_subgraph.nodes(), task_name);
+        let pkg_to_task: FxHashMap<PackageNodeIndex, TaskNodeIndex> = package_subgraph
+            .nodes()
+            .filter_map(|pkg| {
+                self.node_indices_by_task_id
+                    .get(&TaskId { package_index: pkg, task_name: task_name.clone() })
+                    .map(|&task_idx| (pkg, task_idx))
+            })
+            .collect();
 
         // Clone the subgraph so that reconnection edits are visible in subsequent iterations.
         let mut subgraph = package_subgraph.clone();
@@ -225,11 +214,11 @@ impl IndexedTaskGraph {
         }
     }
 
-    /// Recursively add `dependsOn` dependencies to the execution graph.
+    /// Recursively add dependencies to the execution graph based on filtered edges.
     ///
-    /// Starts from the current nodes in `execution_graph`, follows string-form
-    /// task graph edges that match `filter_edge`, and expands object-form package
-    /// dependency entries anchored at each visited source task.
+    /// Starts from the current nodes in `execution_graph` and follows outgoing edges
+    /// that match `filter_edge`, adding new nodes to the frontier until no new nodes
+    /// are discovered.
     fn add_dependencies(
         &self,
         execution_graph: &mut TaskExecutionGraph,
@@ -246,18 +235,6 @@ impl IndexedTaskGraph {
             let mut next_frontier = FxHashSet::<TaskNodeIndex>::default();
 
             for from_node in frontier {
-                if let Some(entries) = self.package_dependency_entries_by_node_index.get(&from_node)
-                {
-                    for entry in entries.iter() {
-                        self.add_package_dependency_entry(
-                            execution_graph,
-                            from_node,
-                            entry,
-                            &mut next_frontier,
-                        );
-                    }
-                }
-
                 for edge_ref in self.task_graph.edges(from_node) {
                     let to_node = edge_ref.target();
                     let dep_type = *edge_ref.weight();
@@ -272,49 +249,6 @@ impl IndexedTaskGraph {
             }
 
             frontier = next_frontier;
-        }
-    }
-
-    fn add_package_dependency_entry(
-        &self,
-        execution_graph: &mut TaskExecutionGraph,
-        from_node: TaskNodeIndex,
-        entry: &PackageDependencyEntry,
-        next_frontier: &mut FxHashSet<TaskNodeIndex>,
-    ) {
-        let from_task_id = &self.task_ids_by_node_index[&from_node];
-        let origin_package = from_task_id.package_index;
-        let package_graph = self.indexed_package_graph.package_graph();
-
-        // Select the origin's direct dependency packages whose edge matches one of
-        // the requested dependency fields, mapped to their `task_name` task nodes.
-        let pkg_to_task = self.resolve_packages_to_tasks(
-            package_graph
-                .edges(origin_package)
-                .filter(|edge| entry.dependency_types.contains(edge.weight()))
-                .map(|edge| edge.target()),
-            &entry.task_name,
-        );
-
-        // Connect the source task to each selected dependency task, recording newly
-        // discovered nodes for the next frontier (`add_edge` inserts the node too).
-        for &task_idx in pkg_to_task.values() {
-            if !execution_graph.graph.contains_node(task_idx) {
-                next_frontier.insert(task_idx);
-            }
-            execution_graph.graph.add_edge(from_node, task_idx, ());
-        }
-
-        // Preserve dependency ordering between the selected packages themselves.
-        for (&src_package, &src_task) in &pkg_to_task {
-            for edge in package_graph.edges(src_package) {
-                if !entry.dependency_types.contains(edge.weight()) {
-                    continue;
-                }
-                if let Some(&dst_task) = pkg_to_task.get(&edge.target()) {
-                    execution_graph.graph.add_edge(src_task, dst_task, ());
-                }
-            }
         }
     }
 }
