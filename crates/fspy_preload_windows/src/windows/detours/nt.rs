@@ -1,8 +1,16 @@
+use std::mem::{offset_of, size_of};
+
 use fspy_shared::ipc::{AccessMode, NativePath, PathAccess};
-use ntapi::ntioapi::{
-    FILE_INFORMATION_CLASS, NtQueryDirectoryFile, NtQueryFullAttributesFile,
-    NtQueryInformationByName, PFILE_BASIC_INFORMATION, PFILE_NETWORK_OPEN_INFORMATION,
-    PIO_APC_ROUTINE, PIO_STATUS_BLOCK,
+use ntapi::{
+    ntioapi::{
+        FILE_INFORMATION_CLASS, NtQueryDirectoryFile, NtQueryFullAttributesFile,
+        NtQueryInformationByName, PFILE_BASIC_INFORMATION, PFILE_NETWORK_OPEN_INFORMATION,
+        PIO_APC_ROUTINE, PIO_STATUS_BLOCK,
+    },
+    ntpsapi::{
+        NtCreateUserProcess, PPS_ATTRIBUTE_LIST, PPS_CREATE_INFO, PS_ATTRIBUTE,
+        PS_ATTRIBUTE_IMAGE_NAME, PS_ATTRIBUTE_LIST,
+    },
 };
 use winapi::{
     shared::{
@@ -20,6 +28,137 @@ use crate::windows::{
     convert::{ToAbsolutePath, ToAccessMode},
     detour::{Detour, DetourAny},
 };
+
+// CreateProcess ultimately asks NtCreateUserProcess to open the executable image. Some Windows
+// versions perform that open entirely inside the syscall, so it never reaches the NtCreateFile and
+// query functions hooked below. PS_ATTRIBUTE_IMAGE_NAME is the kernel-facing path that identifies
+// the image to open; RTL_USER_PROCESS_PARAMETERS.ImagePathName is only metadata for the child PEB
+// and can intentionally name a different file.
+//
+// Record the image before forwarding the syscall, matching the attempted-access semantics of the
+// other NT hooks in this module. This is important for missing executables: the failed lookup is
+// still an input access even though NtCreateUserProcess returns an error.
+static DETOUR_NT_CREATE_USER_PROCESS: Detour<
+    unsafe extern "system" fn(
+        process_handle: PHANDLE,
+        thread_handle: PHANDLE,
+        process_desired_access: ACCESS_MASK,
+        thread_desired_access: ACCESS_MASK,
+        process_object_attributes: POBJECT_ATTRIBUTES,
+        thread_object_attributes: POBJECT_ATTRIBUTES,
+        process_flags: ULONG,
+        thread_flags: ULONG,
+        process_parameters: PVOID,
+        create_info: PPS_CREATE_INFO,
+        attribute_list: PPS_ATTRIBUTE_LIST,
+    ) -> NTSTATUS,
+> =
+    // SAFETY: initializing Detour with the real NtCreateUserProcess function pointer
+    unsafe {
+        Detour::new(c"NtCreateUserProcess", NtCreateUserProcess, {
+            unsafe extern "system" fn new_fn(
+                process_handle: PHANDLE,
+                thread_handle: PHANDLE,
+                process_desired_access: ACCESS_MASK,
+                thread_desired_access: ACCESS_MASK,
+                process_object_attributes: POBJECT_ATTRIBUTES,
+                thread_object_attributes: POBJECT_ATTRIBUTES,
+                process_flags: ULONG,
+                thread_flags: ULONG,
+                process_parameters: PVOID,
+                create_info: PPS_CREATE_INFO,
+                attribute_list: PPS_ATTRIBUTE_LIST,
+            ) -> NTSTATUS {
+                // SAFETY: observing caller memory without changing the forwarded arguments
+                unsafe { handle_process_image(attribute_list) };
+
+                // SAFETY: calling the original NtCreateUserProcess with all original arguments
+                unsafe {
+                    (DETOUR_NT_CREATE_USER_PROCESS.real())(
+                        process_handle,
+                        thread_handle,
+                        process_desired_access,
+                        thread_desired_access,
+                        process_object_attributes,
+                        thread_object_attributes,
+                        process_flags,
+                        thread_flags,
+                        process_parameters,
+                        create_info,
+                        attribute_list,
+                    )
+                }
+            }
+            new_fn
+        })
+    };
+
+unsafe fn handle_process_image(attribute_list: PPS_ATTRIBUTE_LIST) {
+    // SAFETY: NtCreateUserProcess requires its attribute list to remain valid for this call.
+    if let Some(image_path) = unsafe { read_process_image_attribute(attribute_list) } {
+        // Sender serialization completes before this call returns, so NativePath does not retain
+        // the borrowed PS_ATTRIBUTE_IMAGE_NAME buffer past the NtCreateUserProcess call.
+        // SAFETY: accessing the global client which was initialized during DLL_PROCESS_ATTACH
+        unsafe { global_client() }
+            .send(PathAccess { mode: AccessMode::READ, path: NativePath::from_wide(image_path) });
+    }
+}
+
+/// Find the kernel-facing executable name in an `NtCreateUserProcess` attribute list.
+///
+/// `PS_ATTRIBUTE_LIST` is a variable-length structure: `TotalLength` covers a fixed-size header
+/// followed by contiguous `PS_ATTRIBUTE` entries. Its Rust definition contains one placeholder
+/// element, so the actual entry count must be derived from `TotalLength`, not from the array type.
+///
+/// The returned slice borrows the caller's `PS_ATTRIBUTE_IMAGE_NAME` buffer and is valid only while
+/// the intercepted `NtCreateUserProcess` call is active.
+///
+/// # Safety
+///
+/// `attribute_list` and the image-name buffer it references must remain valid for the duration of
+/// the intercepted call, as required by `NtCreateUserProcess`.
+unsafe fn read_process_image_attribute<'a>(
+    attribute_list: PPS_ATTRIBUTE_LIST,
+) -> Option<&'a [u16]> {
+    // SAFETY: NtCreateUserProcess keeps a supplied attribute list valid for this call; a null
+    // optional pointer is parsed as None.
+    let attribute_list = unsafe { attribute_list.as_ref()? };
+
+    // Attributes is a trailing array. Subtract its byte offset to remove the header; the native API
+    // contract guarantees that the remaining bytes contain complete PS_ATTRIBUTE entries.
+    let attributes_offset = offset_of!(PS_ATTRIBUTE_LIST, Attributes);
+    let attribute_count =
+        (attribute_list.TotalLength - attributes_offset) / size_of::<PS_ATTRIBUTE>();
+
+    // The Rust field exposes the first placeholder entry as a reference; TotalLength describes how
+    // many contiguous entries follow it in the actual variable-length allocation.
+    let first_attribute = attribute_list.Attributes.first()?;
+    // SAFETY: TotalLength covers a contiguous variable-length tail starting at first_attribute.
+    let attributes: &[PS_ATTRIBUTE] =
+        unsafe { std::slice::from_raw_parts(std::ptr::from_ref(first_attribute), attribute_count) };
+    for attribute in attributes {
+        if attribute.Attribute != PS_ATTRIBUTE_IMAGE_NAME {
+            continue;
+        }
+
+        // Unlike a UNICODE_STRING, PS_ATTRIBUTE_IMAGE_NAME stores the path buffer directly in
+        // ValuePtr and stores its byte length in Size. It is the image path consumed by the kernel,
+        // so do not fall back to the separately spoofable process-parameter path.
+        // SAFETY: PS_ATTRIBUTE_IMAGE_NAME stores a valid UTF-16 pointer in ValuePtr for this call;
+        // a null pointer is parsed as None.
+        let image_path = unsafe { attribute.u.ValuePtr.cast::<u16>().as_ref()? };
+        // SAFETY: the attribute contract guarantees a valid UTF-16 buffer of Size bytes for this
+        // call. Size is the counted string length, so no NUL-terminator parsing is needed.
+        return Some(unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::from_ref(image_path),
+                attribute.Size / size_of::<u16>(),
+            )
+        });
+    }
+
+    None
+}
 
 static DETOUR_NT_CREATE_FILE: Detour<
     unsafe extern "system" fn(
@@ -380,6 +519,7 @@ static DETOUR_NT_QUERY_DIRECTORY_FILE_EX: Detour<NtQueryDirectoryFileExFn> =
     };
 
 pub const DETOURS: &[DetourAny] = &[
+    DETOUR_NT_CREATE_USER_PROCESS.as_any(),
     DETOUR_NT_CREATE_FILE.as_any(),
     DETOUR_NT_OPEN_FILE.as_any(),
     DETOUR_NT_QUERY_ATTRIBUTES_FILE.as_any(),

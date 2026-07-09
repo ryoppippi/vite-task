@@ -15,6 +15,8 @@ async fn create_process_a() -> anyhow::Result<()> {
     let accesses = track_fn!((), |(): ()| {
         // SAFETY: zeroing STARTUPINFOA is valid for the Windows API
         let mut si: STARTUPINFOA = unsafe { std::mem::zeroed() };
+        // CreateProcess requires cb to identify the STARTUPINFO layout.
+        si.cb = std::mem::size_of::<STARTUPINFOA>().try_into().unwrap();
         // SAFETY: zeroing PROCESS_INFORMATION is valid for the Windows API
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: all pointers are valid or null_mut as required by CreateProcessA
@@ -44,6 +46,8 @@ async fn create_process_w() -> anyhow::Result<()> {
     let accesses = track_fn!((), |(): ()| {
         // SAFETY: zeroing STARTUPINFOW is valid for the Windows API
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        // CreateProcess requires cb to identify the STARTUPINFO layout.
+        si.cb = std::mem::size_of::<STARTUPINFOW>().try_into().unwrap();
         // SAFETY: zeroing PROCESS_INFORMATION is valid for the Windows API
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         let program =
