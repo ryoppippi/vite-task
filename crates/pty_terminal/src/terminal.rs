@@ -55,13 +55,12 @@ pub struct Terminal {
 
 struct Vt100Callbacks {
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
-    unhandled_osc_sequences: VecDeque<Vec<Vec<u8>>>,
+    window_titles: VecDeque<Vec<u8>>,
 }
 
 impl vt100::Callbacks for Vt100Callbacks {
-    fn unhandled_osc(&mut self, _screen: &mut vt100::Screen, params: &[&[u8]]) {
-        let owned: Vec<Vec<u8>> = params.iter().map(|p| p.to_vec()).collect();
-        self.unhandled_osc_sequences.push_back(owned);
+    fn set_window_title(&mut self, _screen: &mut vt100::Screen, title: &[u8]) {
+        self.window_titles.push_back(title.to_vec());
     }
 
     fn unhandled_csi(
@@ -175,17 +174,14 @@ impl PtyReader {
         out
     }
 
-    /// Drains and returns all unhandled OSC sequences received since the last call.
-    ///
-    /// Each entry is a list of byte-vector parameters from a single OSC sequence
-    /// (`ESC ] param1 ; param2 ; ... ST`).
+    /// Takes the next window title received while parsing PTY output.
     ///
     /// # Panics
     ///
     /// Panics if the parser lock is poisoned.
     #[must_use]
-    pub fn take_unhandled_osc_sequences(&self) -> VecDeque<Vec<Vec<u8>>> {
-        std::mem::take(&mut self.parser.lock().unwrap().callbacks_mut().unhandled_osc_sequences)
+    pub fn take_window_title(&self) -> Option<Vec<u8>> {
+        self.parser.lock().unwrap().callbacks_mut().window_titles.pop_front()
     }
 
     /// Returns the current cursor position as `(row, col)`, both 0-indexed.
@@ -371,10 +367,7 @@ impl Terminal {
             size.rows,
             size.cols,
             0,
-            Vt100Callbacks {
-                writer: Arc::clone(&writer),
-                unhandled_osc_sequences: VecDeque::new(),
-            },
+            Vt100Callbacks { writer: Arc::clone(&writer), window_titles: VecDeque::new() },
         )));
 
         Ok(Self {

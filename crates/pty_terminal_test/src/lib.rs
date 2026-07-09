@@ -8,8 +8,6 @@ pub use pty_terminal::{
     terminal::{ChildHandle, PtyWriter},
 };
 
-const MILESTONE_HYPERTEXT: char = '\u{200b}';
-
 /// A test-oriented terminal that provides milestone-based synchronization.
 ///
 /// Wraps a PTY terminal, splitting it into a [`PtyWriter`] for sending input
@@ -44,12 +42,10 @@ impl TestTerminal {
 }
 
 impl Reader {
-    /// Returns terminal screen contents with milestone hyperlink text removed.
+    /// Returns the current terminal screen contents.
     #[must_use]
     pub fn screen_contents(&self) -> String {
-        let mut contents = self.pty.get_ref().screen_contents();
-        contents.retain(|ch| ch != MILESTONE_HYPERTEXT);
-        contents
+        self.pty.get_ref().screen_contents()
     }
 
     /// Returns the screen contents with inline ANSI SGR escape codes preserved.
@@ -63,11 +59,7 @@ impl Reader {
     ///
     /// Returns the terminal screen contents at the moment the milestone is detected.
     ///
-    /// Milestones use a uniform protocol across platforms: the milestone name
-    /// is encoded in an OSC 8 hyperlink URI. We parse unhandled OSC sequences
-    /// from the VT parser state (instead of raw byte matching), then decode the
-    /// milestone URI payload. The zero-width milestone hyperlink anchor is
-    /// stripped from returned screen contents.
+    /// Milestones use a uniform title token across platforms.
     ///
     /// # Panics
     ///
@@ -78,17 +70,12 @@ impl Reader {
         let mut buf = [0u8; 4096];
 
         loop {
-            let found = self
-                .pty
-                .get_ref()
-                .take_unhandled_osc_sequences()
-                .into_iter()
-                .filter_map(|params| {
-                    pty_terminal_test_client::decode_milestone_from_osc8_params(&params)
-                })
-                .any(|decoded| decoded == name);
-            if found {
-                return self.screen_contents();
+            while let Some(title) = self.pty.get_ref().take_window_title() {
+                if pty_terminal_test_client::decode_milestone_title(&title)
+                    .is_some_and(|milestone| milestone == name)
+                {
+                    return self.screen_contents();
+                }
             }
 
             let n = self.pty.read(&mut buf).expect("PTY read failed");

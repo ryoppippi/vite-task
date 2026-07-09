@@ -71,7 +71,7 @@ fn milestone_raw_mode_keystrokes() {
     assert!(status.success());
 }
 
-/// Verifies that the non-visual milestone fence in `mark_milestone` does not
+/// Verifies that the non-visual milestone title in `mark_milestone` does not
 /// pollute `screen_contents()`. The subprocess appends characters without
 /// clearing the screen, so any leftover space would appear between them.
 #[test]
@@ -124,4 +124,31 @@ fn milestone_does_not_pollute_screen() {
     writer.flush().unwrap();
     let status = reader.wait_for_exit().unwrap();
     assert!(status.success());
+}
+
+#[test]
+#[timeout(5000)]
+#[expect(clippy::redundant_clone, reason = "command_for_fn evaluates its argument twice")]
+fn descendant_process_can_mark_milestone() {
+    let nested = command_for_fn!((), |(): ()| {
+        pty_terminal_test_client::mark_milestone("nested");
+    });
+    let nested_program = nested.program.to_string_lossy().into_owned();
+    let nested_args =
+        nested.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+
+    let cmd = CommandBuilder::from(command_for_fn!(
+        (nested_program.clone(), nested_args.clone()),
+        |(nested_program, nested_args): (String, Vec<String>)| {
+            pty_terminal_test_client::mark_milestone("root");
+            let status =
+                std::process::Command::new(nested_program).args(nested_args).status().unwrap();
+            assert!(status.success());
+        }
+    ));
+
+    let TestTerminal { writer: _, mut reader, child_handle: _ } =
+        TestTerminal::spawn(ScreenSize { rows: 80, cols: 80 }, cmd).unwrap();
+    let _ = reader.expect_milestone("nested");
+    assert!(reader.wait_for_exit().unwrap().success());
 }
