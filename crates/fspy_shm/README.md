@@ -34,6 +34,7 @@ The channel hides that difference with its lock file. [`ChannelConf::sender`](..
 Each platform keeps its implementation rationale beside its source:
 
 - [Linux: `memfd` with a descriptor broker](src/linux/README.md)
+- [macOS: named POSIX shared memory](src/macos/README.md)
 - [Windows: sparse file-backed named mapping](src/windows/README.md)
 
-At this point in the stack, macOS still delegates mapping creation and opening to the [`shared_memory`](https://crates.io/crates/shared_memory) crate.
+All implementations provide the API above. Their identifiers and operating system objects differ. Each platform README explains the chosen API and why the previous `shared_memory` backend did not meet its requirements.
