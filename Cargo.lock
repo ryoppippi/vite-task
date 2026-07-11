@@ -1322,6 +1322,7 @@ dependencies = [
  "widestring",
  "winapi",
  "wincode",
+ "windows-sys 0.61.2",
  "winsafe 0.0.27",
 ]
 
@@ -1397,6 +1398,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
