@@ -231,6 +231,16 @@ pub struct EnabledCacheConfig {
     #[serde(default)]
     #[cfg_attr(all(test, not(clippy)), ts(inline))]
     pub output: Option<Vec<UserOutputEntry>>,
+
+    /// Whether this task can use the remote cache. Defaults to `true`.
+    ///
+    /// The remote cache is used only when these also hold:
+    /// - Caching isn't turned off by `--no-cache` or the workspace root's `cache` setting.
+    /// - An endpoint is set with `cache.remote.url` in the workspace root config or with
+    ///   `VP_REMOTE_CACHE_URL`.
+    /// - Remote access isn't set to `off` with `--remote-cache` or `VP_REMOTE_CACHE`. It
+    ///   defaults to `read`, which downloads cached results without uploading new ones.
+    pub remote: Option<bool>,
 }
 
 /// Options for user-defined tasks in `vite.config.*`, excluding the command.
@@ -331,7 +341,7 @@ pub enum UserTaskDefinition {
 ///
 /// This option can only be set in the workspace root's config file.
 /// Setting it in a package's config will result in an error.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 // TS derive macro generates code using std types that clippy disallows; skip derive during linting
 #[cfg_attr(all(test, not(clippy)), derive(TS), ts(optional_fields))]
 #[serde(untagged, deny_unknown_fields)]
@@ -356,14 +366,20 @@ pub enum UserGlobalCacheConfig {
         ///
         /// Default: `true`
         tasks: Option<bool>,
+
+        /// Remote cache shared by tasks in the workspace.
+        remote: Option<UserRemoteCacheConfig>,
     },
 }
 
-/// Resolved global cache configuration with concrete boolean values.
-#[derive(Debug, Clone, Copy)]
+/// Resolved global cache configuration with concrete values.
+#[derive(Debug, Clone)]
 pub struct ResolvedGlobalCacheConfig {
     pub scripts: bool,
     pub tasks: bool,
+    /// Remote cache endpoint from `cache.remote.url`, if configured. Planning
+    /// uses `VP_REMOTE_CACHE_URL` instead when it's set.
+    pub remote_url: Option<Arc<str>>,
 }
 
 impl ResolvedGlobalCacheConfig {
@@ -373,14 +389,30 @@ impl ResolvedGlobalCacheConfig {
     #[must_use]
     pub fn resolve_from(config: Option<&UserGlobalCacheConfig>) -> Self {
         match config {
-            None => Self { scripts: false, tasks: true },
-            Some(UserGlobalCacheConfig::Bool(true)) => Self { scripts: true, tasks: true },
-            Some(UserGlobalCacheConfig::Bool(false)) => Self { scripts: false, tasks: false },
-            Some(UserGlobalCacheConfig::Detailed { scripts, tasks }) => {
-                Self { scripts: scripts.unwrap_or(false), tasks: tasks.unwrap_or(true) }
+            None => Self { scripts: false, tasks: true, remote_url: None },
+            Some(UserGlobalCacheConfig::Bool(true)) => {
+                Self { scripts: true, tasks: true, remote_url: None }
             }
+            Some(UserGlobalCacheConfig::Bool(false)) => {
+                Self { scripts: false, tasks: false, remote_url: None }
+            }
+            Some(UserGlobalCacheConfig::Detailed { scripts, tasks, remote }) => Self {
+                scripts: scripts.unwrap_or(false),
+                tasks: tasks.unwrap_or(true),
+                remote_url: remote.as_ref().map(|remote| Arc::clone(&remote.url)),
+            },
         }
     }
+}
+
+/// Remote cache settings in the workspace root's `cache` config.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+// TS derive macro generates code using std types that clippy disallows; skip derive during linting
+#[cfg_attr(all(test, not(clippy)), derive(TS), ts(rename = "RemoteCacheConfig"))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UserRemoteCacheConfig {
+    /// HTTP or HTTPS namespace endpoint. Overridden by `VP_REMOTE_CACHE_URL`.
+    pub url: Arc<str>,
 }
 
 /// User configuration structure for `run` field in `vite.config.*`
@@ -733,6 +765,7 @@ mod tests {
                 "untrackedEnv": ["FOO"],
                 "input": ["src/**"],
                 "output": ["dist/**"],
+                "remote": false,
             },
         });
         let user_config: UserTaskConfig = serde_json::from_value(user_config_json.clone()).unwrap();
@@ -744,6 +777,7 @@ mod tests {
                 untracked_env: Some(std::iter::once("FOO".into()).collect()),
                 input: Some(vec![UserInputEntry::Glob("src/**".into())]),
                 output: Some(vec![UserOutputEntry::Glob("dist/**".into())]),
+                remote: Some(false),
             })
         );
     }
@@ -753,6 +787,15 @@ mod tests {
         let user_config_json = json!({
             "command": "echo test",
             "cache": { "foo": 42 },
+        });
+        assert!(serde_json::from_value::<UserTaskConfig>(user_config_json).is_err());
+    }
+
+    #[test]
+    fn test_top_level_remote_cache_error() {
+        let user_config_json = json!({
+            "command": "echo test",
+            "remoteCache": false,
         });
         assert!(serde_json::from_value::<UserTaskConfig>(user_config_json).is_err());
     }
@@ -972,6 +1015,25 @@ mod tests {
         let resolved = ResolvedGlobalCacheConfig::resolve_from(Some(&config));
         assert!(resolved.scripts);
         assert!(!resolved.tasks);
+    }
+
+    #[test]
+    fn test_global_cache_detailed_remote() {
+        let config: UserGlobalCacheConfig = serde_json::from_value(json!({
+            "scripts": true,
+            "remote": { "url": "https://cache.example/projects/test" },
+        }))
+        .unwrap();
+        let resolved = ResolvedGlobalCacheConfig::resolve_from(Some(&config));
+        assert!(resolved.scripts);
+        assert!(resolved.tasks);
+        assert_eq!(resolved.remote_url.as_deref(), Some("https://cache.example/projects/test"));
+
+        assert!(
+            serde_json::from_value::<UserGlobalCacheConfig>(json!({ "remote": { "foo": 42 } }))
+                .is_err()
+        );
+        assert!(serde_json::from_value::<UserRunConfig>(json!({ "remoteCache": {} })).is_err());
     }
 
     #[test]

@@ -293,9 +293,9 @@ impl IndexedTaskGraph {
                 })?
                 .unwrap_or_default();
 
-            if let Some(cache) = user_config.cache {
+            if let Some(cache) = &user_config.cache {
                 if is_workspace_root {
-                    root_cache = Some(cache);
+                    root_cache = Some(cache.clone());
                 } else {
                     return Err(TaskGraphLoadError::CacheInNonRootPackage {
                         package_path: package_dir.clone(),

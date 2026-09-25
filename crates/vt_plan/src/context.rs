@@ -8,7 +8,9 @@ use vt_graph::{
 use vt_path::AbsolutePath;
 use vt_str::Str;
 
-use crate::{PlanRequestParser, path_env::prepend_path_env};
+use crate::{
+    PlanRequestParser, path_env::prepend_path_env, remote_cache::ResolvedRemoteCacheConfig,
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -52,6 +54,21 @@ pub struct PlanContext<'a> {
     /// Final resolved global cache config, combining the graph's config with any CLI override.
     resolved_global_cache: ResolvedGlobalCacheConfig,
 
+    /// Remote cache access for the commands planned at this `vp run` level.
+    ///
+    /// `plan_query_request` resolves it at the start of each level from
+    /// `cache.remote.url` and the envs visible at that level, after writing the
+    /// level's `--remote-cache` flag to `VP_REMOTE_CACHE`. Those envs include the
+    /// process env, outer levels' flags, and prefixes on the command that
+    /// started the level, like `VP_REMOTE_CACHE=off vp run build`. Prefixes on
+    /// the level's own commands are added afterwards, so they reach the task
+    /// processes but don't change this value.
+    ///
+    /// Settings pass between levels only through envs. A nested level gets a
+    /// copy of this value through [`duplicate`](Self::duplicate), but replaces
+    /// it before any reads.
+    resolved_remote_cache: Option<ResolvedRemoteCacheConfig>,
+
     /// The query that caused the current expansion.
     /// Used by the skip rule to detect and skip duplicate nested expansions.
     parent_query: Arc<TaskQuery>,
@@ -76,6 +93,7 @@ impl<'a> PlanContext<'a> {
             indexed_task_graph,
             extra_args: Arc::default(),
             resolved_global_cache,
+            resolved_remote_cache: None,
             parent_query,
         }
     }
@@ -146,8 +164,16 @@ impl<'a> PlanContext<'a> {
         &self.resolved_global_cache
     }
 
-    pub const fn set_resolved_global_cache(&mut self, config: ResolvedGlobalCacheConfig) {
+    pub fn set_resolved_global_cache(&mut self, config: ResolvedGlobalCacheConfig) {
         self.resolved_global_cache = config;
+    }
+
+    pub const fn resolved_remote_cache(&self) -> Option<&ResolvedRemoteCacheConfig> {
+        self.resolved_remote_cache.as_ref()
+    }
+
+    pub fn set_resolved_remote_cache(&mut self, config: Option<ResolvedRemoteCacheConfig>) {
+        self.resolved_remote_cache = config;
     }
 
     pub fn parent_query(&self) -> &TaskQuery {
@@ -173,7 +199,8 @@ impl<'a> PlanContext<'a> {
             task_call_stack: self.task_call_stack.clone(),
             indexed_task_graph: self.indexed_task_graph,
             extra_args: Arc::clone(&self.extra_args),
-            resolved_global_cache: self.resolved_global_cache,
+            resolved_global_cache: self.resolved_global_cache.clone(),
+            resolved_remote_cache: self.resolved_remote_cache.clone(),
             parent_query: Arc::clone(&self.parent_query),
         }
     }
